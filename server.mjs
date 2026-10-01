@@ -7,7 +7,8 @@ import vm from 'node:vm';
 import QRCode from 'qrcode';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const publicRoot = path.join(root, 'public');
+// جميع الملفات في جذر المستودع لتسهيل رفعها من GitHub.
+const publicRoot = root;
 const rooms = new Map();
 const uid = () => crypto.randomUUID();
 const token = () => crypto.randomBytes(24).toString('hex');

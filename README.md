@@ -18,6 +18,8 @@ npm start
 - Build Command: `npm install`
 - Start Command: `npm start`
 
+هذه النسخة مخصصة للرفع المباشر عبر GitHub: ارفع جميع الملفات إلى واجهة المستودع الرئيسية، ولا تنشئ مجلد `public` ولا تنقل الملفات داخله.
+
 أو دع Render يقرأ ملف `render.yaml` تلقائيًا.
 
 ## المزايا
