@@ -18,8 +18,8 @@ async function refresh(){if(!session)return;try{const next=await api('state');if
 function startPolling(){clearInterval(poller);poller=setInterval(refresh,1000);startClock()}
 function startClock(){clearInterval(clock);clock=setInterval(updateClock,250)}
 function updateClock(){const el=$('#globalClock');if(!el||!state)return;const left=Math.max(0,Math.ceil((state.deadline-Date.now())/1000));el.textContent=state.deadline?left:'--';el.parentElement?.classList.toggle('danger',left<=10&&left>0)}
-function top(){return `<div class="topbar"><div class="logo">أرض النفط <small>#${state.code}</small></div><div class="stats"><div class="pill">${PHASES[state.phase]}</div><div class="pill">الجولة <b>${state.round}</b></div>${state.me?`<div class="pill">الرصيد <b>${fmt(state.me.cash)}</b></div>`:''}<div class="clock-ring"><small>الوقت</small><b id="globalClock">--</b></div></div></div>`}
-function shell(content,bg=''){app.innerHTML=`<div class="screen online-screen"><div class="noise"></div>${bg}${top()}<main class="main">${content}</main></div>`;updateClock()}
+function gameHeader(){return `<div class="topbar"><div class="logo">أرض النفط <small>#${state.code}</small></div><div class="stats"><div class="pill">${PHASES[state.phase]}</div><div class="pill">الجولة <b>${state.round}</b></div>${state.me?`<div class="pill">الرصيد <b>${fmt(state.me.cash)}</b></div>`:''}<div class="clock-ring"><small>الوقت</small><b id="globalClock">--</b></div></div></div>`}
+function shell(content,bg=''){app.innerHTML=`<div class="screen online-screen"><div class="noise"></div>${bg}${gameHeader()}<main class="main">${content}</main></div>`;updateClock()}
 function playerList(){return `<div class="online-players">${state.players.map(p=>`<div class="online-player ${p.connected?'':'offline'}"><i>${p.shipChosen?'🚢':'⚓'}</i><b>${p.name}</b><small>${p.connected?'متصل':'غير متصل'}</small></div>`).join('')}</div>`}
 
 function render(){if(!state)return home();if(state.host)renderHost();else renderPlayer()}
