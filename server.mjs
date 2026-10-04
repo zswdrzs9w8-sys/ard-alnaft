@@ -251,16 +251,7 @@ function tick(room) {
   if (room.phase === 'auctionResult') { room.players.forEach(player => { player.auctionSeen = true; }); return startMission(room); }
   if (room.phase === 'mission') { room.players.forEach(player => { player.missionRead = true; }); return startQuestionSelect(room); }
   if (room.phase === 'questionSelect') { room.players.forEach(player => { if (!player.question) assignQuestion(room, player, 'easy'); }); return startQuestions(room); }
-  if (room.phase === 'question') {
-    room.players.forEach(player => {
-      if (!player.answered) {
-        player.answered = true; player.answerCorrect = false;
-        player.correctAnswer = player.question?.a[player.question.c] || 'انتهى الوقت';
-      }
-    });
-    return setPhase(room, 'answerReveal', 5, 'ظهرت نتائج الإجابات لجميع القباطنة');
-  }
-  if (room.phase === 'answerReveal') return startMarket(room);
+  if (room.phase === 'question') { room.players.forEach(player => { if (!player.answered) player.answered = true; }); return startMarket(room); }
   if (room.phase === 'market') return startStocks(room);
   if (room.phase === 'stocks') return startNews(room);
   if (room.phase === 'news') return nextRound(room);
@@ -412,7 +403,7 @@ async function gameApi(req, res) {
       room.news.push('أجاب أحد القباطنة إجابة صحيحة وربح مكافأة.');
     } else room.news.push('لم يوفق أحد القباطنة في سؤال هذه الجولة.');
     checkMission(room, player);
-    if (all(room, item => item.answered)) setPhase(room, 'answerReveal', 5, 'ظهرت نتائج الإجابات لجميع القباطنة');
+    if (all(room, item => item.answered)) startMarket(room);
   } else if (action === 'finishPhase') {
     if (!['market', 'stocks'].includes(room.phase)) return send(res, 409, { error: 'لا يوجد إنهاء في هذه المرحلة' });
     player.phaseDone = true;
