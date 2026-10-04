@@ -47,9 +47,9 @@ async function loadQuestions() {
 }
 const questionBank = await loadQuestions();
 
-function newPlayer(name) {
+function newPlayer(name, bot = false) {
   return {
-    id: uid(), token: token(), name, cash: 5000,
+    id: uid(), token: token(), name, bot, cash: 5000,
     res: { oil: 0, gas: 0, gold: 0, iron: 0 }, stocks: { oil: 0, gas: 0, gold: 0, iron: 0 },
     ship: null, mission: null, missionDone: false, missionRead: false, missionAssignedRound: 1, phaseDone: false,
     advancedCorrect: 0, deals: 0, connected: true, readyAt: null,
@@ -103,6 +103,15 @@ function startAuction(room) {
     player.land = null; player.landIndex = null; player.landPrice = 0; player.lands = [];
     player.loot = null; player.auctionSeen = false; player.missionRead = false;
   });
+  room.players.filter(player => player.bot).forEach(player => {
+    const choices = [...Array(room.auction.lands.length).keys()].sort(() => Math.random() - .5).slice(0, crypto.randomInt(1, 4));
+    for (const landIndex of choices) {
+      const amount = Math.min(player.cash, 500 * crypto.randomInt(1, 4));
+      if (amount < 500) break;
+      player.cash -= amount;
+      room.auction.offers.push({ playerId: player.id, amount, landIndex, at: Date.now() + crypto.randomInt(1000) });
+    }
+  });
   setPhase(room, 'auction', 30, 'أمامكم 30 ثانية لتوزيع عروضكم على الأراضي الست');
 }
 function grantLand(room, player, landIndex, amount) {
@@ -124,11 +133,11 @@ function finishAuction(room) {
     if (bids.length) grantLand(room, playerById(room, bids[0].playerId), landIndex, bids[0].amount);
     else room.auction.results.push({ landIndex, land: lands[landIndex].name, skipped: true });
   });
-  room.players.forEach(player => { player.auctionSeen = false; });
+  room.players.forEach(player => { player.auctionSeen = !!player.bot; });
   setPhase(room, 'auctionResult', 60, 'كُشفت نتائج المزاد والموارد؛ اضغط «شاهدت النتائج» بعد مراجعتها');
 }
 function startMission(room) {
-  room.players.forEach(player => { player.missionRead = false; });
+  room.players.forEach(player => { player.missionRead = !!player.bot; });
   setPhase(room, 'mission', 90, 'اقرأ مهمتك السرية واضغط «قرأتها»؛ لن تبدأ الأسئلة حتى ينتهي الجميع');
 }
 
@@ -137,6 +146,7 @@ function startQuestionSelect(room) {
     player.question = null; player.answered = false; player.answerCorrect = null;
     player.correctAnswer = null; player.difficulty = null;
   });
+  room.players.filter(player => player.bot).forEach(player => assignQuestion(room, player, ['easy', 'medium', 'hard'][crypto.randomInt(3)]));
   setPhase(room, 'questionSelect', 45, 'كل قبطان يختار مستوى سؤاله؛ يبدأ التحدي عند انتهاء الجميع');
 }
 function unusedQuestions(room, level) { return questionBank[level].filter(question => !room.usedQuestions.has(question.id)); }
@@ -152,15 +162,23 @@ function assignQuestion(room, player, level) {
 }
 function startQuestions(room) {
   room.players.forEach(player => { if (!player.question) assignQuestion(room, player, 'easy'); });
+  room.players.filter(player => player.bot).forEach(player => {
+    const correct = Math.random() < .68;
+    player.answered = true; player.answerCorrect = correct; player.correctAnswer = player.question.a[player.question.c];
+    if (correct) { player.cash += player.prize; if (player.difficulty !== 'easy') player.advancedCorrect++; }
+    checkMission(room, player);
+  });
   setPhase(room, 'question', 40, 'الأسئلة بدأت للجميع؛ السوق لن يفتح حتى يجيب جميع القباطنة');
 }
 function startMarket(room) {
   room.trades = [];
   resetDone(room);
+  room.players.filter(player => player.bot).forEach(player => { player.phaseDone = true; });
   setPhase(room, 'market', 150, 'السوق مفتوح للجميع؛ اضغط «انتهيت» عند إكمال صفقاتك');
 }
 function startStocks(room) {
   resetDone(room);
+  room.players.filter(player => player.bot).forEach(player => { player.phaseDone = true; });
   setPhase(room, 'stocks', 90, 'البورصة مفتوحة للجميع؛ اضغط «انتهيت» عند إكمال استثماراتك');
 }
 function startNews(room) {
@@ -241,7 +259,7 @@ function tick(room) {
 
 function publicPlayer(player) {
   return {
-    id: player.id, name: player.name, connected: player.connected,
+    id: player.id, name: player.name, bot: player.bot, connected: player.connected,
     shipChosen: !!player.ship, hasLand: player.lands.length > 0, land: player.land, landCount: player.lands.length,
     auctionSeen: !!player.auctionSeen,
     missionRead: !!player.missionRead, questionChosen: !!player.question,
@@ -306,6 +324,14 @@ async function gameApi(req, res) {
   if (action === 'create') {
     const room = createRoom(body.usedQuestionIds);
     return send(res, 201, { code: room.code, token: room.hostToken, state: view(room, room.hostToken) });
+  }
+  if (action === 'demo') {
+    const room = createRoom(body.usedQuestionIds);
+    const human = newPlayer('القبطان التجريبي');
+    room.players.push(human, newPlayer('القبطان شاهين', true), newPlayer('القبطان نوخذة', true), newPlayer('القبطان مرجان', true));
+    startGame(room);
+    room.players.filter(player => player.bot).forEach((player, index) => { player.ship = ships[index % ships.length].id; });
+    return send(res, 201, { code: room.code, token: human.token, state: view(room, human.token) });
   }
   const code = clean(body.code, 5).toUpperCase();
   const room = rooms.get(code);

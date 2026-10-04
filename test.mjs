@@ -88,6 +88,13 @@ try {
   const qr = await fetch(`${base}/api/qr?text=${encodeURIComponent(`${base}/?room=${code}`)}`);
   assert.equal(qr.status, 200);
   assert.match(await qr.text(), /<svg/);
+  const demo = await call('demo', { usedQuestionIds: [] }, 201);
+  assert.equal(demo.state.phase, 'ship');
+  assert.equal(demo.state.players.length, 4);
+  assert.equal(demo.state.players.filter(player => player.bot).length, 3);
+  await call('chooseShip', { code: demo.code, token: demo.token, ship: 'energy' });
+  const demoAuction = await call('state', { code: demo.code, token: demo.token });
+  assert.equal(demoAuction.phase, 'auction');
   console.log('SYNC_FLOW_V5_OK', code, host.players.length, host.round, host.usedQuestionIds.length);
 } finally {
   child.kill('SIGTERM');
