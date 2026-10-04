@@ -20,10 +20,10 @@ const ships = [
   { id: 'industry', name: 'السفينة الصناعية', need: { oil: 30, gas: 20, gold: 14, iron: 32 } }
 ];
 const missions = [
-  { id: 'scholar', title: 'العقل الجريء', text: 'أجب عن سؤال متوسط أو صعب إجابة صحيحة.', reward: '2,500 ريال + قطعتا ذهب' },
-  { id: 'broker', title: 'شيخ السوق', text: 'أنجز صفقتين مع القباطنة.', reward: '3,000 ريال + وحدتا غاز' },
-  { id: 'oilKing', title: 'ملك النفط', text: 'اجمع 18 برميل نفط.', reward: '2,500 ريال + 3 حديد' },
-  { id: 'investor', title: 'المستثمر الخفي', text: 'امتلك 5 أسهم في وقت واحد.', reward: '3,000 ريال + برميلا نفط' }
+  { id: 'scholar', title: 'العقل الجريء', text: 'أجب عن سؤال متوسط أو صعب إجابة صحيحة.', reward: '2,500 ريال + قطعتا ذهب + صندوق عشوائي' },
+  { id: 'broker', title: 'شيخ السوق', text: 'أنجز صفقتين مع القباطنة.', reward: '3,000 ريال + وحدتا غاز + صندوق عشوائي' },
+  { id: 'oilKing', title: 'ملك النفط', text: 'اجمع 18 برميل نفط.', reward: '2,500 ريال + 3 حديد + صندوق عشوائي' },
+  { id: 'investor', title: 'المستثمر الخفي', text: 'امتلك 5 أسهم في وقت واحد.', reward: '3,000 ريال + برميلا نفط + صندوق عشوائي' }
 ];
 const lands = [
   { name: 'صحراء الفجر', description: 'سهول رملية واسعة تشتهر بآبار النفط القريبة من السطح.' },
@@ -51,10 +51,10 @@ function newPlayer(name) {
   return {
     id: uid(), token: token(), name, cash: 5000,
     res: { oil: 0, gas: 0, gold: 0, iron: 0 }, stocks: { oil: 0, gas: 0, gold: 0, iron: 0 },
-    ship: null, mission: null, missionDone: false, missionRead: false, phaseDone: false,
+    ship: null, mission: null, missionDone: false, missionRead: false, missionAssignedRound: 1, phaseDone: false,
     advancedCorrect: 0, deals: 0, connected: true, readyAt: null,
     question: null, answered: false, answerCorrect: null, correctAnswer: null,
-    land: null, landIndex: null, landPrice: 0, loot: null
+    land: null, landIndex: null, landPrice: 0, lands: [], loot: null, auctionSeen: false, lastBox: null
   };
 }
 
@@ -82,57 +82,54 @@ function playerById(room, id) { return room.players.find(player => player.id ===
 function all(room, predicate) { return room.players.length > 0 && room.players.every(predicate); }
 function resetDone(room) { room.players.forEach(player => { player.phaseDone = false; }); }
 
-function startGame(room) {
+function assignMissions(room) {
+  const shuffled = [...missions].sort(() => Math.random() - .5);
   room.players.forEach((player, index) => {
-    player.mission = missions[index % missions.length];
+    player.mission = shuffled[index % shuffled.length];
     player.missionDone = false;
     player.missionRead = false;
+    player.missionAssignedRound = room.round;
   });
+}
+
+function startGame(room) {
+  assignMissions(room);
   setPhase(room, 'ship', 90, 'اختيار البواخر مفتوح؛ يبدأ المزاد عندما ينتهي الجميع');
 }
 
 function startAuction(room) {
-  room.auction = { landIndex: 0, currentBid: null, offers: [], results: [] };
+  room.auction = { lands: lands.slice(0, 6), offers: [], results: [], resolved: false };
   room.players.forEach(player => {
-    player.land = null; player.landIndex = null; player.landPrice = 0;
-    player.loot = null; player.missionRead = false;
+    player.land = null; player.landIndex = null; player.landPrice = 0; player.lands = [];
+    player.loot = null; player.auctionSeen = false; player.missionRead = false;
   });
-  openAuctionLand(room);
+  setPhase(room, 'auction', 30, 'أمامكم 30 ثانية لتوزيع عروضكم على الأراضي الست');
 }
-function openAuctionLand(room) {
-  const land = lands[room.auction.landIndex];
-  room.auction.currentBid = null;
-  setPhase(room, 'auction', 30, `المزاد مفتوح على ${land.name}`);
-}
-function grantLand(room, player, landIndex, amount, automatic = false) {
+function grantLand(room, player, landIndex, amount) {
   const land = lands[landIndex];
-  const price = Math.min(player.cash, amount);
-  player.cash -= price;
-  player.land = land.name; player.landIndex = landIndex; player.landPrice = price;
-  player.loot = { oil: 3 + crypto.randomInt(8), gas: 2 + crypto.randomInt(6), gold: 1 + crypto.randomInt(4), iron: 2 + crypto.randomInt(7) };
-  resources.forEach(key => { player.res[key] += player.loot[key]; });
-  room.auction.results.push({ playerId: player.id, name: player.name, landIndex, land: land.name, amount: price, automatic, loot: player.loot });
-  room.news.push(`رست ${land.name} على أحد القباطنة بقيمة ${price} ريال.`);
+  const loot = { oil: 3 + crypto.randomInt(8), gas: 2 + crypto.randomInt(6), gold: 1 + crypto.randomInt(4), iron: 2 + crypto.randomInt(7) };
+  player.land = land.name; player.landIndex = landIndex; player.landPrice += amount;
+  player.lands.push({ name: land.name, landIndex, amount, loot });
+  player.loot = resources.reduce((total, key) => ({ ...total, [key]: (total[key] || 0) + loot[key] }), player.loot || {});
+  resources.forEach(key => { player.res[key] += loot[key]; });
+  room.auction.results.push({ playerId: player.id, name: player.name, landIndex, land: land.name, amount, loot });
+  room.news.push(`رست ${land.name} على أحد القباطنة بقيمة ${amount} ريال.`);
   checkMission(room, player);
 }
 function finishAuction(room) {
-  const used = new Set(room.players.filter(player => player.landIndex !== null).map(player => player.landIndex));
-  const free = lands.map((_, index) => index).filter(index => !used.has(index));
-  for (const player of room.players.filter(item => !item.land)) grantLand(room, player, free.shift(), 500, true);
+  if (room.auction.resolved) return;
+  room.auction.resolved = true;
+  room.auction.lands.forEach((_, landIndex) => {
+    const bids = room.auction.offers.filter(offer => offer.landIndex === landIndex).sort((a, b) => b.amount - a.amount || a.at - b.at);
+    if (bids.length) grantLand(room, playerById(room, bids[0].playerId), landIndex, bids[0].amount);
+    else room.auction.results.push({ landIndex, land: lands[landIndex].name, skipped: true });
+  });
+  room.players.forEach(player => { player.auctionSeen = false; });
+  setPhase(room, 'auctionResult', 60, 'كُشفت نتائج المزاد والموارد؛ اضغط «شاهدت النتائج» بعد مراجعتها');
+}
+function startMission(room) {
   room.players.forEach(player => { player.missionRead = false; });
   setPhase(room, 'mission', 90, 'اقرأ مهمتك السرية واضغط «قرأتها»؛ لن تبدأ الأسئلة حتى ينتهي الجميع');
-}
-function closeAuctionLand(room) {
-  const auction = room.auction;
-  const currentIndex = auction.landIndex;
-  if (auction.currentBid) {
-    const winner = playerById(room, auction.currentBid.playerId);
-    if (winner && !winner.land) grantLand(room, winner, currentIndex, auction.currentBid.amount);
-  } else auction.results.push({ landIndex: currentIndex, land: lands[currentIndex].name, skipped: true });
-  if (all(room, player => !!player.land)) return finishAuction(room);
-  auction.landIndex++;
-  if (auction.landIndex >= lands.length) return finishAuction(room);
-  openAuctionLand(room);
 }
 
 function startQuestionSelect(room) {
@@ -178,14 +175,13 @@ function startNews(room) {
   setPhase(room, 'news', 35, 'نشرة أرض النفط على الهواء؛ بعدها تبدأ جولة جديدة للجميع');
 }
 function nextRound(room) {
-  const ready = room.players.filter(isShipComplete).sort((a, b) => (a.readyAt || Infinity) - (b.readyAt || Infinity));
-  if (ready.length) { room.winner = ready[0].id; return setPhase(room, 'finished', 0, `فاز القبطان ${ready[0].name}`); }
   room.round++;
   room.news = [];
   room.players.forEach(player => {
     player.cash += 500; player.question = null; player.answered = false;
     player.readyAt = null; player.phaseDone = false; player.missionRead = false;
   });
+  if ((room.round - 1) % 2 === 0) assignMissions(room);
   startAuction(room);
 }
 
@@ -195,6 +191,20 @@ function isShipComplete(player) {
   return resources.every(key => player.res[key] >= ship.need[key]);
 }
 function checkReady(player) { if (isShipComplete(player) && !player.readyAt) player.readyAt = Date.now(); }
+function openMysteryBox(room, player, source = 'السوق') {
+  const roll = crypto.randomInt(100);
+  let result;
+  if (roll < 18) result = { type: 'empty', text: 'الصندوق فارغ… الحظ لم يحالفك هذه المرة!' };
+  else if (roll < 38) { player.cash += 1500; result = { type: 'cash', text: 'وجدت 1,500 ريال داخل الصندوق!' }; }
+  else if (roll < 58) { player.res.oil += 7; result = { type: 'oil', text: 'وجدت 7 براميل نفط!' }; }
+  else if (roll < 75) { player.res.gas += 5; result = { type: 'gas', text: 'وجدت 5 وحدات غاز!' }; }
+  else if (roll < 90) { player.res.iron += 5; result = { type: 'iron', text: 'وجدت 5 وحدات حديد!' }; }
+  else { player.res.gold += 5; result = { type: 'gold', text: 'الجائزة الكبرى: 5 قطع ذهب!' }; }
+  player.lastBox = { ...result, source, at: Date.now() };
+  room.news.push(source === 'المهمة السرية' ? 'فاز أحد القباطنة بصندوق عشوائي بعد إنجاز مهمة سرية.' : 'خاطر أحد القباطنة واشترى صندوقًا عشوائيًا من السوق.');
+  checkReady(player);
+  return result;
+}
 function checkMission(room, player) {
   if (!player.mission || player.missionDone) return;
   const done = {
@@ -208,6 +218,7 @@ function checkMission(room, player) {
   if (player.mission.id === 'broker') { player.cash += 3000; player.res.gas += 2; }
   if (player.mission.id === 'oilKing') { player.cash += 2500; player.res.iron += 3; }
   if (player.mission.id === 'investor') { player.cash += 3000; player.res.oil += 2; }
+  openMysteryBox(room, player, 'المهمة السرية');
   room.news.push('أنجز أحد القباطنة مهمة سرية وحصل على مكافأة كبيرة.');
   checkReady(player);
 }
@@ -218,7 +229,8 @@ function tick(room) {
     room.players.forEach(player => { if (!player.ship) player.ship = ships[crypto.randomInt(ships.length)].id; });
     return startAuction(room);
   }
-  if (room.phase === 'auction') return closeAuctionLand(room);
+  if (room.phase === 'auction') return finishAuction(room);
+  if (room.phase === 'auctionResult') { room.players.forEach(player => { player.auctionSeen = true; }); return startMission(room); }
   if (room.phase === 'mission') { room.players.forEach(player => { player.missionRead = true; }); return startQuestionSelect(room); }
   if (room.phase === 'questionSelect') { room.players.forEach(player => { if (!player.question) assignQuestion(room, player, 'easy'); }); return startQuestions(room); }
   if (room.phase === 'question') { room.players.forEach(player => { if (!player.answered) player.answered = true; }); return startMarket(room); }
@@ -230,7 +242,8 @@ function tick(room) {
 function publicPlayer(player) {
   return {
     id: player.id, name: player.name, connected: player.connected,
-    shipChosen: !!player.ship, hasLand: !!player.land, land: player.land,
+    shipChosen: !!player.ship, hasLand: player.lands.length > 0, land: player.land, landCount: player.lands.length,
+    auctionSeen: !!player.auctionSeen,
     missionRead: !!player.missionRead, questionChosen: !!player.question,
     answered: !!player.answered, stageDone: !!player.phaseDone, ready: !!player.readyAt
   };
@@ -243,7 +256,8 @@ function view(room, accessToken) {
     id: player.id, name: player.name, cash: player.cash, res: player.res, stocks: player.stocks,
     ship: player.ship, mission: ['ship', 'auction'].includes(room.phase) ? null : player.mission,
     missionDone: player.missionDone, missionRead: player.missionRead,
-    loot: player.loot, land: player.land, landPrice: player.landPrice,
+    loot: player.loot, land: player.land, lands: player.lands, landPrice: player.landPrice, auctionSeen: player.auctionSeen,
+    shipComplete: isShipComplete(player), lastBox: player.lastBox,
     question: room.phase === 'question' && player.question ? { id: player.question.id, q: player.question.q, a: player.question.a } : null,
     answered: player.answered, answerCorrect: player.answerCorrect, correctAnswer: player.correctAnswer,
     difficulty: player.difficulty, prize: player.prize, stageDone: player.phaseDone,
@@ -251,14 +265,21 @@ function view(room, accessToken) {
     outgoingTrades: room.trades.filter(trade => trade.from === player.id && trade.status === 'pending')
   } : null;
   const auction = room.auction ? {
-    landIndex: room.auction.landIndex, currentLand: lands[room.auction.landIndex] || null,
-    currentBid: room.auction.currentBid, offers: room.auction.offers.slice(-12), results: room.auction.results
+    lands: room.auction.lands,
+    offers: host ? room.auction.offers.map(offer => ({ ...offer, name: playerById(room, offer.playerId)?.name })) : room.auction.offers.filter(offer => offer.playerId === player?.id),
+    results: room.auction.results
   } : null;
+  const finalStandings = room.phase === 'finished' ? room.players.map(item => {
+    const ship = ships.find(candidate => candidate.id === item.ship);
+    const totalNeed = resources.reduce((sum, key) => sum + (ship?.need[key] || 0), 0);
+    const loaded = resources.reduce((sum, key) => sum + Math.min(item.res[key], ship?.need[key] || 0), 0);
+    return { id: item.id, name: item.name, ship: ship?.name, res: item.res, need: ship?.need, progress: totalNeed ? Math.round(loaded / totalNeed * 100) : 0 };
+  }).sort((a, b) => b.progress - a.progress) : [];
   return {
     code: room.code, host, phase: room.phase, round: room.round, deadline: room.deadline,
     message: room.message, players: room.players.map(publicPlayer), prices: room.prices,
     stockPrices: room.stockPrices, lastChanges: room.lastChanges, ships, auction,
-    news: room.news.slice(-8), winner: room.winner, me,
+    news: room.news.slice(-8), winner: room.winner, finalStandings, me,
     usedQuestionIds: host ? [...room.usedQuestions] : undefined
   };
 }
@@ -323,15 +344,20 @@ async function gameApi(req, res) {
     player.ship = body.ship;
     if (all(room, item => !!item.ship)) startAuction(room);
   } else if (action === 'bid') {
-    if (room.phase !== 'auction' || player.land) return send(res, 409, { error: 'لا يمكنك المزايدة الآن' });
+    if (room.phase !== 'auction') return send(res, 409, { error: 'المزاد مغلق الآن' });
+    const landIndex = Math.floor(Number(body.landIndex));
+    if (landIndex < 0 || landIndex >= room.auction.lands.length) return send(res, 400, { error: 'اختر أرضًا صحيحة' });
+    if (room.auction.offers.some(offer => offer.playerId === player.id && offer.landIndex === landIndex)) return send(res, 409, { error: 'أكدت عرضك على هذه الأرض بالفعل' });
     const amount = Math.floor(Number(body.amount) / 500) * 500;
-    const minimum = (room.auction.currentBid?.amount || 0) + 500;
-    if (amount < minimum || amount > player.cash) return send(res, 400, { error: `المزايدة تبدأ من ${minimum} ريال` });
-    const bid = { playerId: player.id, name: player.name, amount, landIndex: room.auction.landIndex, at: Date.now() };
-    room.auction.currentBid = bid;
+    if (amount < 500 || amount > player.cash) return send(res, 400, { error: 'العرض يبدأ من 500 ريال ويجب أن يغطيه رصيدك' });
+    player.cash -= amount;
+    const bid = { playerId: player.id, amount, landIndex, at: Date.now() };
     room.auction.offers.push(bid);
-    room.deadline = Date.now() + 20_000;
-    room.message = `أعلى مزايدة: ${player.name} بمبلغ ${amount} ريال`;
+    room.message = 'المزاد السري مستمر؛ تُحسم الأراضي عند انتهاء العداد';
+  } else if (action === 'auctionSeen') {
+    if (room.phase !== 'auctionResult') return send(res, 409, { error: 'نتائج المزاد غير متاحة الآن' });
+    player.auctionSeen = true;
+    if (all(room, item => item.auctionSeen)) startMission(room);
   } else if (action === 'missionRead') {
     if (room.phase !== 'mission') return send(res, 409, { error: 'مرحلة المهمة انتهت' });
     player.missionRead = true;
@@ -373,6 +399,11 @@ async function gameApi(req, res) {
     }
     room.news.push(`نُفذ أمر ${side === 'buy' ? 'شراء' : 'بيع'} على ${resourceNames[key]} بكمية ${quantity}.`);
     checkMission(room, player); checkReady(player);
+  } else if (action === 'buyBox') {
+    if (room.phase !== 'market' || player.phaseDone) return send(res, 409, { error: 'الصندوق متاح في السوق فقط' });
+    if (player.cash < 2000) return send(res, 400, { error: 'تحتاج إلى 2,000 ريال لشراء الصندوق' });
+    player.cash -= 2000;
+    openMysteryBox(room, player, 'السوق');
   } else if (action === 'createTrade') {
     if (room.phase !== 'market' || player.phaseDone) return send(res, 409, { error: 'المقايضة مغلقة لك' });
     const target = playerById(room, String(body.to));
@@ -408,6 +439,12 @@ async function gameApi(req, res) {
       player.stocks[key] -= quantity; player.cash += total;
     }
     checkMission(room, player);
+  } else if (action === 'sendShip') {
+    if (!isShipComplete(player)) return send(res, 409, { error: 'لم تكتمل جميع متطلبات الباخرة بعد' });
+    player.readyAt = Date.now();
+    room.winner = player.id;
+    room.deadline = 0;
+    setPhase(room, 'finished', 0, `فاز القبطان ${player.name}`);
   } else return send(res, 400, { error: 'إجراء غير معروف' });
   return send(res, 200, view(room, accessToken));
 }

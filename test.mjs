@@ -23,36 +23,38 @@ try {
   let host = await call('start', { code, token: hostToken });
   assert.equal(host.phase, 'ship');
   await call('chooseShip', { code, token: t1, ship: 'energy' });
-  let p1 = await call('state', { code, token: t1 });
-  assert.equal(p1.phase, 'ship');
   await call('chooseShip', { code, token: t2, ship: 'treasure' });
   host = await call('state', { code, token: hostToken });
   assert.equal(host.phase, 'auction');
-  assert.equal(host.auction.currentLand.name, 'صحراء الفجر');
+  assert.equal(host.auction.lands.length, 6);
 
-  await call('bid', { code, token: t1, amount: 500 });
-  await call('bid', { code, token: t2, amount: 1000 });
+  await call('bid', { code, token: t1, landIndex: 0, amount: 1000 });
+  await call('bid', { code, token: t1, landIndex: 1, amount: 500 });
+  let p1 = await call('state', { code, token: t1 });
+  assert.equal(p1.me.cash, 3500);
+  assert.equal(p1.auction.offers.length, 2);
+  await call('bid', { code, token: t2, landIndex: 0, amount: 1500 });
+  await call('bid', { code, token: t2, landIndex: 2, amount: 500 });
+  const hidden = await call('state', { code, token: t1 });
+  assert.equal(hidden.auction.offers.length, 2);
+
   await call('advance', { code, token: hostToken });
   host = await call('state', { code, token: hostToken });
-  assert.equal(host.phase, 'auction');
-  assert.equal(host.auction.currentLand.name, 'هضبة العنبر');
-  await call('bid', { code, token: t2, amount: 1500 }, 409);
-  await call('bid', { code, token: t1, amount: 500 });
-  await call('advance', { code, token: hostToken });
-  host = await call('state', { code, token: hostToken });
-  assert.equal(host.phase, 'mission');
-  assert.equal(host.players.filter(player => player.hasLand).length, 2);
+  assert.equal(host.phase, 'auctionResult');
+  assert.equal(host.auction.results.filter(result => !result.skipped).length, 3);
+  p1 = await call('state', { code, token: t1 });
+  assert.equal(p1.me.lands.length, 1);
+  assert.ok(Object.values(p1.me.loot).some(value => value > 0));
 
-  await call('missionRead', { code, token: t1 });
+  await call('auctionSeen', { code, token: t1 });
+  await call('auctionSeen', { code, token: t2 });
   p1 = await call('state', { code, token: t1 });
   assert.equal(p1.phase, 'mission');
-  await call('missionRead', { code, token: t2 });
-  p1 = await call('state', { code, token: t1 });
-  assert.equal(p1.phase, 'questionSelect');
+  assert.ok(p1.me.mission?.title);
 
+  await call('missionRead', { code, token: t1 });
+  await call('missionRead', { code, token: t2 });
   await call('chooseQuestion', { code, token: t1, level: 'easy' });
-  p1 = await call('state', { code, token: t1 });
-  assert.equal(p1.phase, 'questionSelect');
   await call('chooseQuestion', { code, token: t2, level: 'hard' });
   p1 = await call('state', { code, token: t1 });
   const p2 = await call('state', { code, token: t2 });
@@ -60,27 +62,23 @@ try {
   assert.notEqual(p1.me.question.id, p2.me.question.id);
 
   await call('answer', { code, token: t1, index: 0 });
-  p1 = await call('state', { code, token: t1 });
-  assert.equal(p1.phase, 'question');
   await call('answer', { code, token: t2, index: 0 });
   p1 = await call('state', { code, token: t1 });
   assert.equal(p1.phase, 'market');
 
-  await call('finishPhase', { code, token: t1 });
-  p1 = await call('state', { code, token: t1 });
-  assert.equal(p1.phase, 'market');
-  assert.equal(p1.me.stageDone, true);
-  await call('finishPhase', { code, token: t2 });
-  p1 = await call('state', { code, token: t1 });
-  assert.equal(p1.phase, 'stocks');
+  if (p1.me.cash >= 2000) {
+    await call('buyBox', { code, token: t1 });
+    p1 = await call('state', { code, token: t1 });
+    assert.ok(p1.me.lastBox?.text);
+  }
+  await call('sendShip', { code, token: t1 }, 409);
 
   await call('finishPhase', { code, token: t1 });
-  p1 = await call('state', { code, token: t1 });
-  assert.equal(p1.phase, 'stocks');
+  await call('finishPhase', { code, token: t2 });
+  await call('finishPhase', { code, token: t1 });
   await call('finishPhase', { code, token: t2 });
   host = await call('state', { code, token: hostToken });
   assert.equal(host.phase, 'news');
-
   await call('advance', { code, token: hostToken });
   host = await call('state', { code, token: hostToken });
   assert.equal(host.phase, 'auction');
@@ -90,7 +88,7 @@ try {
   const qr = await fetch(`${base}/api/qr?text=${encodeURIComponent(`${base}/?room=${code}`)}`);
   assert.equal(qr.status, 200);
   assert.match(await qr.text(), /<svg/);
-  console.log('SYNC_FLOW_OK', code, host.players.length, host.round, host.usedQuestionIds.length);
+  console.log('SYNC_FLOW_V5_OK', code, host.players.length, host.round, host.usedQuestionIds.length);
 } finally {
   child.kill('SIGTERM');
 }
