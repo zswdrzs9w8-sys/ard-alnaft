@@ -64,6 +64,10 @@ try {
   await call('answer', { code, token: t1, index: 0 });
   await call('answer', { code, token: t2, index: 0 });
   p1 = await call('state', { code, token: t1 });
+  assert.equal(p1.phase, 'answerReveal');
+  assert.equal(typeof p1.me.answerCorrect, 'boolean');
+  await call('advance', { code, token: hostToken });
+  p1 = await call('state', { code, token: t1 });
   assert.equal(p1.phase, 'market');
 
   if (p1.me.cash >= 2000) {
