@@ -14,6 +14,7 @@ const clean = (value, length = 24) => String(value ?? '').trim().slice(0, length
 const randomCode = () => crypto.randomBytes(3).toString('hex').slice(0, 5).toUpperCase();
 const resources = ['oil', 'gas', 'gold', 'iron'];
 const resourceNames = { oil: 'النفط', gas: 'الغاز', gold: 'الذهب', iron: 'الحديد' };
+const randomBetween = (min, max, step = 1) => min + crypto.randomInt(Math.floor((max - min) / step) + 1) * step;
 const ships = [
   { id: 'energy', name: 'ناقلة الطاقة', need: { oil: 45, gas: 22, gold: 8, iron: 12 } },
   { id: 'treasure', name: 'سفينة الكنوز', need: { oil: 22, gas: 15, gold: 25, iron: 12 } },
@@ -51,7 +52,7 @@ function newPlayer(name, bot = false) {
   return {
     id: uid(), token: token(), name, bot, cash: 5000,
     res: { oil: 0, gas: 0, gold: 0, iron: 0 }, stocks: { oil: 0, gas: 0, gold: 0, iron: 0 },
-    ship: null, mission: null, missionDone: false, missionRead: false, missionAssignedRound: 1, phaseDone: false,
+    ship: null, shipNeed: null, mission: null, missionDone: false, missionRead: false, missionAssignedRound: 1, phaseDone: false,
     advancedCorrect: 0, deals: 0, connected: true, readyAt: null,
     question: null, answered: false, answerCorrect: null, correctAnswer: null,
     land: null, landIndex: null, landPrice: 0, lands: [], loot: null, auctionSeen: false, lastBox: null
@@ -62,11 +63,11 @@ function createRoom(usedIds = []) {
   let code = randomCode();
   while (rooms.has(code)) code = randomCode();
   const room = {
-    code, hostToken: token(), phase: 'lobby', round: 1, players: [], createdAt: Date.now(), deadline: 0,
+    code, hostToken: token(), phase: 'lobby', round: 1, difficulty: 'easy', players: [], createdAt: Date.now(), deadline: 0,
     usedQuestions: new Set(Array.isArray(usedIds) ? usedIds.map(String) : []),
-    prices: { oil: 650, gas: 850, gold: 1900, iron: 1000 },
-    stockPrices: { oil: 250, gas: 300, gold: 500, iron: 350 },
-    lastChanges: { oil: -13.4, gas: 6.8, gold: 2.1, iron: -4.7 },
+    prices: { oil: randomBetween(500, 800, 25), gas: randomBetween(650, 1050, 25), gold: randomBetween(1500, 2300, 50), iron: randomBetween(800, 1250, 25) },
+    stockPrices: { oil: randomBetween(180, 340, 10), gas: randomBetween(220, 400, 10), gold: randomBetween(380, 650, 10), iron: randomBetween(250, 480, 10) },
+    lastChanges: { oil: Number((Math.random() * 30 - 15).toFixed(1)), gas: Number((Math.random() * 30 - 15).toFixed(1)), gold: Number((Math.random() * 30 - 15).toFixed(1)), iron: Number((Math.random() * 30 - 15).toFixed(1)) },
     auction: null, trades: [], news: [], winner: null, message: 'بانتظار انضمام القباطنة'
   };
   rooms.set(code, room);
@@ -81,6 +82,16 @@ function setPhase(room, name, seconds, message) {
 function playerById(room, id) { return room.players.find(player => player.id === id); }
 function all(room, predicate) { return room.players.length > 0 && room.players.every(predicate); }
 function resetDone(room) { room.players.forEach(player => { player.phaseDone = false; }); }
+function shipOptions(room) {
+  const multiplier = room.difficulty === 'hard' ? 2 : 1;
+  return ships.map(ship => ({ ...ship, need: Object.fromEntries(Object.entries(ship.need).map(([key, value]) => [key, value * multiplier])) }));
+}
+function assignShip(room, player, shipId) {
+  const ship = shipOptions(room).find(item => item.id === shipId);
+  if (!ship) return false;
+  player.ship = ship.id; player.shipNeed = { ...ship.need };
+  return true;
+}
 
 function assignMissions(room) {
   const shuffled = [...missions].sort(() => Math.random() - .5);
@@ -204,9 +215,8 @@ function nextRound(room) {
 }
 
 function isShipComplete(player) {
-  if (!player.ship) return false;
-  const ship = ships.find(item => item.id === player.ship);
-  return resources.every(key => player.res[key] >= ship.need[key]);
+  if (!player.ship || !player.shipNeed) return false;
+  return resources.every(key => player.res[key] >= player.shipNeed[key]);
 }
 function checkReady(player) { if (isShipComplete(player) && !player.readyAt) player.readyAt = Date.now(); }
 function openMysteryBox(room, player, source = 'السوق') {
@@ -244,14 +254,23 @@ function checkMission(room, player) {
 function tick(room) {
   if (!room.deadline || Date.now() < room.deadline) return;
   if (room.phase === 'ship') {
-    room.players.forEach(player => { if (!player.ship) player.ship = ships[crypto.randomInt(ships.length)].id; });
+    room.players.forEach(player => { if (!player.ship) assignShip(room, player, ships[crypto.randomInt(ships.length)].id); });
     return startAuction(room);
   }
   if (room.phase === 'auction') return finishAuction(room);
   if (room.phase === 'auctionResult') { room.players.forEach(player => { player.auctionSeen = true; }); return startMission(room); }
   if (room.phase === 'mission') { room.players.forEach(player => { player.missionRead = true; }); return startQuestionSelect(room); }
   if (room.phase === 'questionSelect') { room.players.forEach(player => { if (!player.question) assignQuestion(room, player, 'easy'); }); return startQuestions(room); }
-  if (room.phase === 'question') { room.players.forEach(player => { if (!player.answered) player.answered = true; }); return startMarket(room); }
+  if (room.phase === 'question') {
+    room.players.forEach(player => {
+      if (!player.answered) {
+        player.answered = true; player.answerCorrect = false;
+        player.correctAnswer = player.question?.a[player.question.c] || 'انتهى الوقت';
+      }
+    });
+    return setPhase(room, 'answerReveal', 5, 'ظهرت نتائج الإجابات لجميع القباطنة');
+  }
+  if (room.phase === 'answerReveal') return startMarket(room);
   if (room.phase === 'market') return startStocks(room);
   if (room.phase === 'stocks') return startNews(room);
   if (room.phase === 'news') return nextRound(room);
@@ -289,14 +308,15 @@ function view(room, accessToken) {
   } : null;
   const finalStandings = room.phase === 'finished' ? room.players.map(item => {
     const ship = ships.find(candidate => candidate.id === item.ship);
-    const totalNeed = resources.reduce((sum, key) => sum + (ship?.need[key] || 0), 0);
-    const loaded = resources.reduce((sum, key) => sum + Math.min(item.res[key], ship?.need[key] || 0), 0);
-    return { id: item.id, name: item.name, ship: ship?.name, res: item.res, need: ship?.need, progress: totalNeed ? Math.round(loaded / totalNeed * 100) : 0 };
+    const need = item.shipNeed || ship?.need;
+    const totalNeed = resources.reduce((sum, key) => sum + (need?.[key] || 0), 0);
+    const loaded = resources.reduce((sum, key) => sum + Math.min(item.res[key], need?.[key] || 0), 0);
+    return { id: item.id, name: item.name, ship: ship?.name, res: item.res, need, progress: totalNeed ? Math.round(loaded / totalNeed * 100) : 0 };
   }).sort((a, b) => b.progress - a.progress) : [];
   return {
     code: room.code, host, phase: room.phase, round: room.round, deadline: room.deadline,
     message: room.message, players: room.players.map(publicPlayer), prices: room.prices,
-    stockPrices: room.stockPrices, lastChanges: room.lastChanges, ships, auction,
+    stockPrices: room.stockPrices, lastChanges: room.lastChanges, ships: shipOptions(room), difficulty: room.difficulty, auction,
     news: room.news.slice(-8), winner: room.winner, finalStandings, me,
     usedQuestionIds: host ? [...room.usedQuestions] : undefined
   };
@@ -327,10 +347,11 @@ async function gameApi(req, res) {
   }
   if (action === 'demo') {
     const room = createRoom(body.usedQuestionIds);
+    room.difficulty = body.difficulty === 'hard' ? 'hard' : 'easy';
     const human = newPlayer('القبطان التجريبي');
     room.players.push(human, newPlayer('القبطان شاهين', true), newPlayer('القبطان نوخذة', true), newPlayer('القبطان مرجان', true));
     startGame(room);
-    room.players.filter(player => player.bot).forEach((player, index) => { player.ship = ships[index % ships.length].id; });
+    room.players.filter(player => player.bot).forEach((player, index) => { assignShip(room, player, ships[index % ships.length].id); });
     return send(res, 201, { code: room.code, token: human.token, state: view(room, human.token) });
   }
   const code = clean(body.code, 5).toUpperCase();
@@ -357,6 +378,12 @@ async function gameApi(req, res) {
     startGame(room);
     return send(res, 200, view(room, accessToken));
   }
+  if (action === 'setDifficulty') {
+    if (!host || room.phase !== 'lobby') return send(res, 403, { error: 'تغيير الصعوبة متاح للمضيف قبل البدء فقط' });
+    room.difficulty = body.difficulty === 'hard' ? 'hard' : 'easy';
+    room.message = room.difficulty === 'hard' ? 'تم اختيار المستوى الصعب: متطلبات البواخر مضاعفة' : 'تم اختيار المستوى السهل: متطلبات البواخر الأساسية';
+    return send(res, 200, view(room, accessToken));
+  }
   if (action === 'advance') {
     if (!host) return send(res, 403, { error: 'التحكم للمضيف فقط' });
     room.deadline = Date.now() - 1;
@@ -367,7 +394,7 @@ async function gameApi(req, res) {
   const player = requirePlayer(room, accessToken);
   if (action === 'chooseShip') {
     if (room.phase !== 'ship' || player.ship || !ships.some(ship => ship.id === body.ship)) return send(res, 409, { error: 'اختيار الباخرة غير متاح' });
-    player.ship = body.ship;
+    assignShip(room, player, body.ship);
     if (all(room, item => !!item.ship)) startAuction(room);
   } else if (action === 'bid') {
     if (room.phase !== 'auction') return send(res, 409, { error: 'المزاد مغلق الآن' });
@@ -403,7 +430,7 @@ async function gameApi(req, res) {
       room.news.push('أجاب أحد القباطنة إجابة صحيحة وربح مكافأة.');
     } else room.news.push('لم يوفق أحد القباطنة في سؤال هذه الجولة.');
     checkMission(room, player);
-    if (all(room, item => item.answered)) startMarket(room);
+    if (all(room, item => item.answered)) setPhase(room, 'answerReveal', 5, 'ظهرت نتائج الإجابات لجميع القباطنة');
   } else if (action === 'finishPhase') {
     if (!['market', 'stocks'].includes(room.phase)) return send(res, 409, { error: 'لا يوجد إنهاء في هذه المرحلة' });
     player.phaseDone = true;

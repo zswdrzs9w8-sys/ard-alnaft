@@ -20,6 +20,14 @@ try {
   const two = await call('join', { code, name: 'قبطان ثانٍ' }, 201);
   const t1 = one.token, t2 = two.token;
 
+  assert.ok(created.state.prices.oil >= 500 && created.state.prices.oil <= 800);
+  assert.ok(created.state.stockPrices.gold >= 380 && created.state.stockPrices.gold <= 650);
+  let difficultyState = await call('setDifficulty', { code, token: hostToken, difficulty: 'hard' });
+  assert.equal(difficultyState.difficulty, 'hard');
+  assert.equal(difficultyState.ships.find(ship => ship.id === 'energy').need.oil, 90);
+  difficultyState = await call('setDifficulty', { code, token: hostToken, difficulty: 'easy' });
+  assert.equal(difficultyState.ships.find(ship => ship.id === 'energy').need.oil, 45);
+
   let host = await call('start', { code, token: hostToken });
   assert.equal(host.phase, 'ship');
   await call('chooseShip', { code, token: t1, ship: 'energy' });
@@ -64,6 +72,10 @@ try {
   await call('answer', { code, token: t1, index: 0 });
   await call('answer', { code, token: t2, index: 0 });
   p1 = await call('state', { code, token: t1 });
+  assert.equal(p1.phase, 'answerReveal');
+  assert.equal(typeof p1.me.answerCorrect, 'boolean');
+  await call('advance', { code, token: hostToken });
+  p1 = await call('state', { code, token: t1 });
   assert.equal(p1.phase, 'market');
 
   if (p1.me.cash >= 2000) {
@@ -88,8 +100,10 @@ try {
   const qr = await fetch(`${base}/api/qr?text=${encodeURIComponent(`${base}/?room=${code}`)}`);
   assert.equal(qr.status, 200);
   assert.match(await qr.text(), /<svg/);
-  const demo = await call('demo', { usedQuestionIds: [] }, 201);
+  const demo = await call('demo', { usedQuestionIds: [], difficulty: 'hard' }, 201);
   assert.equal(demo.state.phase, 'ship');
+  assert.equal(demo.state.difficulty, 'hard');
+  assert.equal(demo.state.ships.find(ship => ship.id === 'energy').need.oil, 90);
   assert.equal(demo.state.players.length, 4);
   assert.equal(demo.state.players.filter(player => player.bot).length, 3);
   await call('chooseShip', { code: demo.code, token: demo.token, ship: 'energy' });
