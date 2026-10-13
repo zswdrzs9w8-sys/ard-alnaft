@@ -40,8 +40,8 @@ const lands = [
 ];
 
 const challengeNames = {
-  memory: 'ذاكرة الشحنة', order: 'رتّب الصناديق', estimate: 'التقدير السريع',
-  price: 'السعر الصحيح', odd: 'الصندوق المختلف', deal: 'صفقة أو فخ'
+  barrels: 'صيد البراميل', pipes: 'أنبوب النفط', balance: 'توازن السفينة',
+  crane: 'رافعة الميناء', vault: 'الخزنة السرية', sorting: 'فرز الشحنات'
 };
 
 function newPlayer(name, bot = false) {
@@ -149,22 +149,18 @@ function startMission(room) {
 
 function makeChallenge() {
   const type = Object.keys(challengeNames)[crypto.randomInt(6)];
-  if (type === 'memory') {
-    const oil = 3 + crypto.randomInt(7), gold = 1 + crypto.randomInt(5);
-    return { type, title: challengeNames[type], prompt: `احفظ الشحنة: ${oil} نفط و${gold} ذهب`, instruction: 'اختر الشحنة المطابقة', options: [`${oil} نفط و${gold} ذهب`, `${oil+1} نفط و${gold} ذهب`, `${oil} نفط و${gold+1} ذهب`], correct: 0 };
-  }
-  if (type === 'order') return { type, title: challengeNames[type], prompt: 'رتّب الحمولات من الأخف إلى الأثقل', instruction: 'اختر الترتيب الصحيح', options: ['120 ← 350 ← 600', '350 ← 120 ← 600', '600 ← 350 ← 120'], correct: 0 };
-  if (type === 'estimate') return { type, title: challengeNames[type], prompt: 'كم برميلًا ترى تقريبًا؟ 🛢️🛢️🛢️ 🛢️🛢️ 🛢️🛢️🛢️', instruction: 'اختر العدد الأقرب', options: ['6', '8', '11'], correct: 1 };
-  if (type === 'price') return { type, title: challengeNames[type], prompt: 'سعر الحديد 1,000 وارتفع 20٪', instruction: 'اختر السعر الجديد', options: ['1,100', '1,200', '1,250'], correct: 1 };
-  if (type === 'odd') return { type, title: challengeNames[type], prompt: 'اكتشف الصندوق المختلف', instruction: 'دقق جيدًا', options: ['📦', '📦', '🧰', '📦'], correct: 2 };
-  return { type, title: challengeNames[type], prompt: 'أي صفقة تمنحك أعلى ربح؟', instruction: 'اختر الصفقة الأفضل', options: ['شراء 500 وبيع 700', 'شراء 800 وبيع 950', 'شراء 1,000 وبيع 1,120'], correct: 0 };
+  if(type==='vault') return {type,title:challengeNames[type],sequence:Array.from({length:5},()=>1+crypto.randomInt(4))};
+  if(type==='pipes') return {type,title:challengeNames[type],rotations:Array.from({length:9},()=>crypto.randomInt(4))};
+  if(type==='balance') return {type,title:challengeNames[type],weights:[1,2,3,4,5,5].sort(()=>Math.random()-.5)};
+  if(type==='sorting') return {type,title:challengeNames[type],items:Array.from({length:10},()=>resources[crypto.randomInt(resources.length)])};
+  return {type,title:challengeNames[type],seed:crypto.randomInt(100000)};
 }
 function startChallenge(room) {
   room.challenge = makeChallenge();
   room.players.forEach(player => { player.challengeAnswer=null; player.challengeSuccess=false; player.challengeTime=null; player.challengeReward=0; player.challengeRank=null; player.phaseDone=false; });
   room.players.filter(player => player.bot).forEach(player => {
     const success = Math.random() < (room.difficulty === 'hard' ? .55 : .72);
-    player.challengeAnswer = success ? room.challenge.correct : (room.challenge.correct + 1) % room.challenge.options.length;
+    player.challengeAnswer = success ? 1 : 0;
     player.challengeSuccess = success; player.challengeTime = 4500 + crypto.randomInt(15000);
   });
   setPhase(room, 'challenge', 30, 'تحدي الميناء بدأ للجميع؛ السرعة والدقة تحددان الترتيب');
@@ -261,7 +257,7 @@ function keepBotsReady(room) {
     if (room.phase === 'mission') player.missionRead = true;
     if (room.phase === 'challenge' && player.challengeAnswer === null) {
       const success = Math.random() < (room.difficulty === 'hard' ? .55 : .72);
-      player.challengeAnswer = success ? room.challenge.correct : (room.challenge.correct + 1) % room.challenge.options.length;
+      player.challengeAnswer = success ? 1 : 0;
       player.challengeSuccess = success;
       player.challengeTime = 4500 + crypto.randomInt(15000);
     }
@@ -329,7 +325,7 @@ function view(room, accessToken) {
     code: room.code, host, phase: room.phase, round: room.round, deadline: room.deadline,
     message: room.message, players: room.players.map(publicPlayer), prices: room.prices,
     stockPrices: room.stockPrices, lastChanges: room.lastChanges, ships: shipOptions(room), difficulty: room.difficulty, auction,
-    challenge: room.challenge ? { type:room.challenge.type,title:room.challenge.title,prompt:room.challenge.prompt,instruction:room.challenge.instruction,options:room.challenge.options } : null,
+    challenge: room.challenge ? { ...room.challenge } : null,
     news: room.news.slice(-8), winner: room.winner, finalStandings, me,
   };
 }
@@ -430,13 +426,11 @@ async function gameApi(req, res) {
     if (room.phase !== 'mission') return send(res, 409, { error: 'مرحلة المهمة انتهت' });
     player.missionRead = true;
     if (all(room, item => item.missionRead)) startChallenge(room);
-  } else if (action === 'challengeAnswer') {
+  } else if (action === 'submitChallenge') {
     if (room.phase !== 'challenge' || player.challengeAnswer !== null) return send(res, 409, { error: 'انتهى تحديك' });
-    const index = Math.floor(Number(body.index));
-    if (index < 0 || index >= room.challenge.options.length) return send(res, 400, { error: 'اختر إجابة صحيحة' });
-    player.challengeAnswer=index;
-    player.challengeSuccess=index===room.challenge.correct;
-    player.challengeTime=Math.max(1,Date.now()-(room.deadline-30000));
+    player.challengeAnswer=1;
+    player.challengeSuccess=body.success===true;
+    player.challengeTime=Math.max(1,Math.min(30000,Math.floor(Number(body.duration)||30000)));
     if(all(room,item=>item.challengeAnswer!==null)) finishChallenge(room);
   } else if (action === 'readyPhase') {
     if (!['challengeResult','news'].includes(room.phase)) return send(res,409,{error:'لا يوجد زر جاهز في هذه المرحلة'});

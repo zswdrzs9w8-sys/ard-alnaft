@@ -33,8 +33,8 @@ try{
   await call('auctionSeen',{code:demo.code,token:demo.token});
   state=await call('missionRead',{code:demo.code,token:demo.token});
   assert.equal(state.phase,'challenge');
-  assert.ok(state.challenge.options.length>=3);
-  state=await call('challengeAnswer',{code:demo.code,token:demo.token,index:0});
+  assert.ok(['barrels','pipes','balance','crane','vault','sorting'].includes(state.challenge.type));
+  state=await call('submitChallenge',{code:demo.code,token:demo.token,success:true,duration:6200});
   assert.equal(state.phase,'challengeResult');
   assert.equal(typeof state.me.challengeReward,'number');
   state=await call('readyPhase',{code:demo.code,token:demo.token});
