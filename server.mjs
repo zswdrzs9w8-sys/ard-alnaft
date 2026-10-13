@@ -3,7 +3,6 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
-import vm from 'node:vm';
 import QRCode from 'qrcode';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -21,7 +20,7 @@ const ships = [
   { id: 'industry', name: 'السفينة الصناعية', need: { oil: 30, gas: 20, gold: 14, iron: 32 } }
 ];
 const missions = [
-  { id: 'scholar', title: 'العقل الجريء', text: 'أجب عن سؤال متوسط أو صعب إجابة صحيحة.', reward: '2,500 ريال + قطعتا ذهب + صندوق عشوائي' },
+  { id: 'scholar', title: 'بطل الميناء', text: 'أنهِ تحدي الميناء بنجاح.', reward: '2,500 ريال + قطعتا ذهب + صندوق عشوائي' },
   { id: 'broker', title: 'شيخ السوق', text: 'أنجز صفقتين مع القباطنة.', reward: '3,000 ريال + وحدتا غاز + صندوق عشوائي' },
   { id: 'oilKing', title: 'ملك النفط', text: 'اجمع 18 برميل نفط.', reward: '2,500 ريال + 3 حديد + صندوق عشوائي' },
   { id: 'investor', title: 'المستثمر الخفي', text: 'امتلك 5 أسهم في وقت واحد.', reward: '3,000 ريال + برميلا نفط + صندوق عشوائي' }
@@ -40,35 +39,31 @@ const lands = [
   { name: 'ساحل الدانة', description: 'آخر الأراضي المعروضة، وميناؤها مناسب لتجميع الحمولة.' }
 ];
 
-async function loadQuestions() {
-  const source = await readFile(path.join(root, 'questions.js'), 'utf8');
-  const sandbox = {};
-  vm.runInNewContext(`${source};this.bank=QUESTION_BANK`, sandbox);
-  return sandbox.bank;
-}
-const questionBank = await loadQuestions();
+const challengeNames = {
+  memory: 'ذاكرة الشحنة', order: 'رتّب الصناديق', estimate: 'التقدير السريع',
+  price: 'السعر الصحيح', odd: 'الصندوق المختلف', deal: 'صفقة أو فخ'
+};
 
 function newPlayer(name, bot = false) {
   return {
     id: uid(), token: token(), name, bot, cash: 5000,
     res: { oil: 0, gas: 0, gold: 0, iron: 0 }, stocks: { oil: 0, gas: 0, gold: 0, iron: 0 },
     ship: null, shipNeed: null, mission: null, missionDone: false, missionRead: false, missionAssignedRound: 1, phaseDone: false,
-    advancedCorrect: 0, deals: 0, connected: true, readyAt: null,
-    question: null, answered: false, answerCorrect: null, correctAnswer: null,
+    challengeWins: 0, deals: 0, connected: true, readyAt: null,
+    challengeAnswer: null, challengeSuccess: false, challengeTime: null, challengeReward: 0, challengeRank: null,
     land: null, landIndex: null, landPrice: 0, lands: [], loot: null, auctionSeen: false, lastBox: null
   };
 }
 
-function createRoom(usedIds = []) {
+function createRoom() {
   let code = randomCode();
   while (rooms.has(code)) code = randomCode();
   const room = {
     code, hostToken: token(), phase: 'lobby', round: 1, difficulty: 'easy', players: [], createdAt: Date.now(), deadline: 0,
-    usedQuestions: new Set(Array.isArray(usedIds) ? usedIds.map(String) : []),
     prices: { oil: randomBetween(500, 800, 25), gas: randomBetween(650, 1050, 25), gold: randomBetween(1500, 2300, 50), iron: randomBetween(800, 1250, 25) },
     stockPrices: { oil: randomBetween(180, 340, 10), gas: randomBetween(220, 400, 10), gold: randomBetween(380, 650, 10), iron: randomBetween(250, 480, 10) },
     lastChanges: { oil: Number((Math.random() * 30 - 15).toFixed(1)), gas: Number((Math.random() * 30 - 15).toFixed(1)), gold: Number((Math.random() * 30 - 15).toFixed(1)), iron: Number((Math.random() * 30 - 15).toFixed(1)) },
-    auction: null, trades: [], news: [], winner: null, message: 'بانتظار انضمام القباطنة'
+    auction: null, challenge: null, trades: [], news: [], winner: null, message: 'بانتظار انضمام القباطنة'
   };
   rooms.set(code, room);
   return room;
@@ -149,37 +144,44 @@ function finishAuction(room) {
 }
 function startMission(room) {
   room.players.forEach(player => { player.missionRead = !!player.bot; });
-  setPhase(room, 'mission', 90, 'اقرأ مهمتك السرية واضغط «قرأتها»؛ لن تبدأ الأسئلة حتى ينتهي الجميع');
+  setPhase(room, 'mission', 90, 'اقرأ مهمتك السرية واضغط «جاهز»؛ لن يبدأ تحدي الميناء حتى ينتهي الجميع');
 }
 
-function startQuestionSelect(room) {
-  room.players.forEach(player => {
-    player.question = null; player.answered = false; player.answerCorrect = null;
-    player.correctAnswer = null; player.difficulty = null;
-  });
-  room.players.filter(player => player.bot).forEach(player => assignQuestion(room, player, ['easy', 'medium', 'hard'][crypto.randomInt(3)]));
-  setPhase(room, 'questionSelect', 45, 'كل قبطان يختار مستوى سؤاله؛ يبدأ التحدي عند انتهاء الجميع');
+function makeChallenge() {
+  const type = Object.keys(challengeNames)[crypto.randomInt(6)];
+  if (type === 'memory') {
+    const oil = 3 + crypto.randomInt(7), gold = 1 + crypto.randomInt(5);
+    return { type, title: challengeNames[type], prompt: `احفظ الشحنة: ${oil} نفط و${gold} ذهب`, instruction: 'اختر الشحنة المطابقة', options: [`${oil} نفط و${gold} ذهب`, `${oil+1} نفط و${gold} ذهب`, `${oil} نفط و${gold+1} ذهب`], correct: 0 };
+  }
+  if (type === 'order') return { type, title: challengeNames[type], prompt: 'رتّب الحمولات من الأخف إلى الأثقل', instruction: 'اختر الترتيب الصحيح', options: ['120 ← 350 ← 600', '350 ← 120 ← 600', '600 ← 350 ← 120'], correct: 0 };
+  if (type === 'estimate') return { type, title: challengeNames[type], prompt: 'كم برميلًا ترى تقريبًا؟ 🛢️🛢️🛢️ 🛢️🛢️ 🛢️🛢️🛢️', instruction: 'اختر العدد الأقرب', options: ['6', '8', '11'], correct: 1 };
+  if (type === 'price') return { type, title: challengeNames[type], prompt: 'سعر الحديد 1,000 وارتفع 20٪', instruction: 'اختر السعر الجديد', options: ['1,100', '1,200', '1,250'], correct: 1 };
+  if (type === 'odd') return { type, title: challengeNames[type], prompt: 'اكتشف الصندوق المختلف', instruction: 'دقق جيدًا', options: ['📦', '📦', '🧰', '📦'], correct: 2 };
+  return { type, title: challengeNames[type], prompt: 'أي صفقة تمنحك أعلى ربح؟', instruction: 'اختر الصفقة الأفضل', options: ['شراء 500 وبيع 700', 'شراء 800 وبيع 950', 'شراء 1,000 وبيع 1,120'], correct: 0 };
 }
-function unusedQuestions(room, level) { return questionBank[level].filter(question => !room.usedQuestions.has(question.id)); }
-function assignQuestion(room, player, level) {
-  let pool = unusedQuestions(room, level);
-  if (!pool.length) pool = Object.values(questionBank).flat().filter(question => !room.usedQuestions.has(question.id));
-  if (!pool.length) return null;
-  const question = pool[crypto.randomInt(pool.length)];
-  room.usedQuestions.add(question.id);
-  player.question = question; player.difficulty = level;
-  player.prize = level === 'hard' ? 5000 : level === 'medium' ? 3000 : 1000;
-  return question;
-}
-function startQuestions(room) {
-  room.players.forEach(player => { if (!player.question) assignQuestion(room, player, 'easy'); });
+function startChallenge(room) {
+  room.challenge = makeChallenge();
+  room.players.forEach(player => { player.challengeAnswer=null; player.challengeSuccess=false; player.challengeTime=null; player.challengeReward=0; player.challengeRank=null; player.phaseDone=false; });
   room.players.filter(player => player.bot).forEach(player => {
-    const correct = Math.random() < .68;
-    player.answered = true; player.answerCorrect = correct; player.correctAnswer = player.question.a[player.question.c];
-    if (correct) { player.cash += player.prize; if (player.difficulty !== 'easy') player.advancedCorrect++; }
-    checkMission(room, player);
+    const success = Math.random() < (room.difficulty === 'hard' ? .55 : .72);
+    player.challengeAnswer = success ? room.challenge.correct : (room.challenge.correct + 1) % room.challenge.options.length;
+    player.challengeSuccess = success; player.challengeTime = 4500 + crypto.randomInt(15000);
   });
-  setPhase(room, 'question', 40, 'الأسئلة بدأت للجميع؛ السوق لن يفتح حتى يجيب جميع القباطنة');
+  setPhase(room, 'challenge', 30, 'تحدي الميناء بدأ للجميع؛ السرعة والدقة تحددان الترتيب');
+}
+function finishChallenge(room) {
+  room.players.forEach(player => { if (player.challengeAnswer === null) { player.challengeSuccess=false; player.challengeTime=999999; } });
+  const winners = room.players.filter(player => player.challengeSuccess).sort((a,b)=>a.challengeTime-b.challengeTime);
+  winners.forEach((player,index) => {
+    player.challengeRank=index+1;
+    player.challengeReward=index===0?5000:index===1?3000:index===2?2000:1000;
+    player.cash += player.challengeReward;
+    if(index<3) openMysteryBox(room,player,'تحدي الميناء');
+    player.challengeWins++;
+    checkMission(room,player);
+  });
+  room.players.forEach(player => { player.phaseDone=!!player.bot; });
+  setPhase(room,'challengeResult',0,'ظهرت نتائج تحدي الميناء؛ اضغط «جاهز» بعد مشاهدة ترتيبك');
 }
 function startMarket(room) {
   room.trades = [];
@@ -201,13 +203,14 @@ function startNews(room) {
   }
   const biggest = [...resources].sort((a, b) => Math.abs(room.lastChanges[b]) - Math.abs(room.lastChanges[a]))[0];
   room.news.push(`سهم ${resourceNames[biggest]} هو الأكثر حركة؛ ${room.lastChanges[biggest] >= 0 ? 'ارتفع' : 'انخفض'} بنسبة ${Math.abs(room.lastChanges[biggest]).toFixed(1)}%.`);
-  setPhase(room, 'news', 35, 'نشرة أرض النفط على الهواء؛ بعدها تبدأ جولة جديدة للجميع');
+  room.players.forEach(player => { player.phaseDone = !!player.bot; });
+  setPhase(room, 'news', 0, 'اقرأ نشرة أرض النفط ثم اضغط «جاهز للجولة التالية»');
 }
 function nextRound(room) {
   room.round++;
   room.news = [];
   room.players.forEach(player => {
-    player.cash += 500; player.question = null; player.answered = false;
+    player.cash += 500; player.challengeAnswer = null; player.challengeSuccess = false;
     player.readyAt = null; player.phaseDone = false; player.missionRead = false;
   });
   if ((room.round - 1) % 2 === 0) assignMissions(room);
@@ -236,7 +239,7 @@ function openMysteryBox(room, player, source = 'السوق') {
 function checkMission(room, player) {
   if (!player.mission || player.missionDone) return;
   const done = {
-    scholar: player.advancedCorrect >= 1, broker: player.deals >= 2,
+    scholar: player.challengeWins >= 1, broker: player.deals >= 2,
     oilKing: player.res.oil >= 18,
     investor: Object.values(player.stocks).reduce((sum, value) => sum + value, 0) >= 5
   }[player.mission.id];
@@ -253,27 +256,12 @@ function checkMission(room, player) {
 
 function tick(room) {
   if (!room.deadline || Date.now() < room.deadline) return;
-  if (room.phase === 'ship') {
-    room.players.forEach(player => { if (!player.ship) assignShip(room, player, ships[crypto.randomInt(ships.length)].id); });
-    return startAuction(room);
-  }
+  if (room.phase === 'ship') return;
   if (room.phase === 'auction') return finishAuction(room);
-  if (room.phase === 'auctionResult') { room.players.forEach(player => { player.auctionSeen = true; }); return startMission(room); }
-  if (room.phase === 'mission') { room.players.forEach(player => { player.missionRead = true; }); return startQuestionSelect(room); }
-  if (room.phase === 'questionSelect') { room.players.forEach(player => { if (!player.question) assignQuestion(room, player, 'easy'); }); return startQuestions(room); }
-  if (room.phase === 'question') {
-    room.players.forEach(player => {
-      if (!player.answered) {
-        player.answered = true; player.answerCorrect = false;
-        player.correctAnswer = player.question?.a[player.question.c] || 'انتهى الوقت';
-      }
-    });
-    return setPhase(room, 'answerReveal', 5, 'ظهرت نتائج الإجابات لجميع القباطنة');
-  }
-  if (room.phase === 'answerReveal') return startMarket(room);
-  if (room.phase === 'market') return startStocks(room);
-  if (room.phase === 'stocks') return startNews(room);
-  if (room.phase === 'news') return nextRound(room);
+  if (room.phase === 'auctionResult') return;
+  if (room.phase === 'mission') return;
+  if (room.phase === 'challenge') return finishChallenge(room);
+  if (room.phase === 'market' || room.phase === 'stocks') return;
 }
 
 function publicPlayer(player) {
@@ -281,8 +269,8 @@ function publicPlayer(player) {
     id: player.id, name: player.name, bot: player.bot, connected: player.connected,
     shipChosen: !!player.ship, hasLand: player.lands.length > 0, land: player.land, landCount: player.lands.length,
     auctionSeen: !!player.auctionSeen,
-    missionRead: !!player.missionRead, questionChosen: !!player.question,
-    answered: !!player.answered, stageDone: !!player.phaseDone, ready: !!player.readyAt
+    missionRead: !!player.missionRead, challengeDone: player.challengeAnswer !== null,
+    stageDone: !!player.phaseDone, ready: !!player.readyAt
   };
 }
 function view(room, accessToken) {
@@ -295,15 +283,15 @@ function view(room, accessToken) {
     missionDone: player.missionDone, missionRead: player.missionRead,
     loot: player.loot, land: player.land, lands: player.lands, landPrice: player.landPrice, auctionSeen: player.auctionSeen,
     shipComplete: isShipComplete(player), lastBox: player.lastBox,
-    question: room.phase === 'question' && player.question ? { id: player.question.id, q: player.question.q, a: player.question.a } : null,
-    answered: player.answered, answerCorrect: player.answerCorrect, correctAnswer: player.correctAnswer,
-    difficulty: player.difficulty, prize: player.prize, stageDone: player.phaseDone,
+    challengeDone: player.challengeAnswer !== null, challengeSuccess: player.challengeSuccess,
+    challengeTime: player.challengeTime, challengeReward: player.challengeReward, challengeRank: player.challengeRank,
+    stageDone: player.phaseDone,
     incomingTrades: room.trades.filter(trade => trade.to === player.id && trade.status === 'pending'),
     outgoingTrades: room.trades.filter(trade => trade.from === player.id && trade.status === 'pending')
   } : null;
   const auction = room.auction ? {
     lands: room.auction.lands,
-    offers: host ? room.auction.offers.map(offer => ({ ...offer, name: playerById(room, offer.playerId)?.name })) : room.auction.offers.filter(offer => offer.playerId === player?.id),
+    offers: room.auction.offers.filter(offer => offer.playerId === player?.id),
     results: room.auction.results
   } : null;
   const finalStandings = room.phase === 'finished' ? room.players.map(item => {
@@ -317,8 +305,8 @@ function view(room, accessToken) {
     code: room.code, host, phase: room.phase, round: room.round, deadline: room.deadline,
     message: room.message, players: room.players.map(publicPlayer), prices: room.prices,
     stockPrices: room.stockPrices, lastChanges: room.lastChanges, ships: shipOptions(room), difficulty: room.difficulty, auction,
+    challenge: room.challenge ? { type:room.challenge.type,title:room.challenge.title,prompt:room.challenge.prompt,instruction:room.challenge.instruction,options:room.challenge.options } : null,
     news: room.news.slice(-8), winner: room.winner, finalStandings, me,
-    usedQuestionIds: host ? [...room.usedQuestions] : undefined
   };
 }
 
@@ -342,13 +330,19 @@ async function gameApi(req, res) {
   const body = await parseBody(req);
   const action = clean(body.action, 30);
   if (action === 'create') {
-    const room = createRoom(body.usedQuestionIds);
-    return send(res, 201, { code: room.code, token: room.hostToken, state: view(room, room.hostToken) });
+    const name = clean(body.name);
+    if (!name) return send(res, 400, { error: 'اكتب اسم القبطان' });
+    const room = createRoom();
+    const creator = newPlayer(name);
+    room.hostToken = creator.token;
+    room.players.push(creator);
+    return send(res, 201, { code: room.code, token: creator.token, state: view(room, creator.token) });
   }
   if (action === 'demo') {
-    const room = createRoom(body.usedQuestionIds);
+    const room = createRoom();
     room.difficulty = body.difficulty === 'hard' ? 'hard' : 'easy';
     const human = newPlayer('القبطان التجريبي');
+    room.hostToken = human.token;
     room.players.push(human, newPlayer('القبطان شاهين', true), newPlayer('القبطان نوخذة', true), newPlayer('القبطان مرجان', true));
     startGame(room);
     room.players.filter(player => player.bot).forEach((player, index) => { assignShip(room, player, ships[index % ships.length].id); });
@@ -385,10 +379,7 @@ async function gameApi(req, res) {
     return send(res, 200, view(room, accessToken));
   }
   if (action === 'advance') {
-    if (!host) return send(res, 403, { error: 'التحكم للمضيف فقط' });
-    room.deadline = Date.now() - 1;
-    tick(room);
-    return send(res, 200, view(room, accessToken));
+    return send(res, 403, { error: 'لا يمكن تجاوز المراحل؛ انتظر جاهزية الجميع أو انتهاء الوقت' });
   }
 
   const player = requirePlayer(room, accessToken);
@@ -414,23 +405,21 @@ async function gameApi(req, res) {
   } else if (action === 'missionRead') {
     if (room.phase !== 'mission') return send(res, 409, { error: 'مرحلة المهمة انتهت' });
     player.missionRead = true;
-    if (all(room, item => item.missionRead)) startQuestionSelect(room);
-  } else if (action === 'chooseQuestion') {
-    if (room.phase !== 'questionSelect' || player.question) return send(res, 409, { error: 'الاختيار غير متاح' });
-    const level = ['easy', 'medium', 'hard'].includes(body.level) ? body.level : 'easy';
-    assignQuestion(room, player, level);
-    if (all(room, item => !!item.question)) startQuestions(room);
-  } else if (action === 'answer') {
-    if (room.phase !== 'question' || player.answered || !player.question) return send(res, 409, { error: 'الإجابة غير متاحة' });
-    const correct = Number(body.index) === player.question.c;
-    player.answered = true; player.answerCorrect = correct; player.correctAnswer = player.question.a[player.question.c];
-    if (correct) {
-      player.cash += player.prize;
-      if (player.difficulty !== 'easy') player.advancedCorrect++;
-      room.news.push('أجاب أحد القباطنة إجابة صحيحة وربح مكافأة.');
-    } else room.news.push('لم يوفق أحد القباطنة في سؤال هذه الجولة.');
-    checkMission(room, player);
-    if (all(room, item => item.answered)) setPhase(room, 'answerReveal', 5, 'ظهرت نتائج الإجابات لجميع القباطنة');
+    if (all(room, item => item.missionRead)) startChallenge(room);
+  } else if (action === 'challengeAnswer') {
+    if (room.phase !== 'challenge' || player.challengeAnswer !== null) return send(res, 409, { error: 'انتهى تحديك' });
+    const index = Math.floor(Number(body.index));
+    if (index < 0 || index >= room.challenge.options.length) return send(res, 400, { error: 'اختر إجابة صحيحة' });
+    player.challengeAnswer=index;
+    player.challengeSuccess=index===room.challenge.correct;
+    player.challengeTime=Math.max(1,Date.now()-(room.deadline-30000));
+    if(all(room,item=>item.challengeAnswer!==null)) finishChallenge(room);
+  } else if (action === 'readyPhase') {
+    if (!['challengeResult','news'].includes(room.phase)) return send(res,409,{error:'لا يوجد زر جاهز في هذه المرحلة'});
+    player.phaseDone=true;
+    if(all(room,item=>item.phaseDone)) {
+      if(room.phase==='challengeResult') startMarket(room); else nextRound(room);
+    }
   } else if (action === 'finishPhase') {
     if (!['market', 'stocks'].includes(room.phase)) return send(res, 409, { error: 'لا يوجد إنهاء في هذه المرحلة' });
     player.phaseDone = true;
