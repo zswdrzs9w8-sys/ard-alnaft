@@ -254,7 +254,31 @@ function checkMission(room, player) {
   checkReady(player);
 }
 
+function keepBotsReady(room) {
+  for (const player of room.players.filter(item => item.bot)) {
+    if (room.phase === 'ship' && !player.ship) assignShip(room, player, ships[crypto.randomInt(ships.length)].id);
+    if (room.phase === 'auctionResult') player.auctionSeen = true;
+    if (room.phase === 'mission') player.missionRead = true;
+    if (room.phase === 'challenge' && player.challengeAnswer === null) {
+      const success = Math.random() < (room.difficulty === 'hard' ? .55 : .72);
+      player.challengeAnswer = success ? room.challenge.correct : (room.challenge.correct + 1) % room.challenge.options.length;
+      player.challengeSuccess = success;
+      player.challengeTime = 4500 + crypto.randomInt(15000);
+    }
+    if (['challengeResult', 'market', 'stocks', 'news'].includes(room.phase)) player.phaseDone = true;
+  }
+  if (room.phase === 'ship' && all(room, player => !!player.ship)) return startAuction(room);
+  if (room.phase === 'auctionResult' && all(room, player => player.auctionSeen)) return startMission(room);
+  if (room.phase === 'mission' && all(room, player => player.missionRead)) return startChallenge(room);
+  if (room.phase === 'challenge' && all(room, player => player.challengeAnswer !== null)) return finishChallenge(room);
+  if (room.phase === 'challengeResult' && all(room, player => player.phaseDone)) return startMarket(room);
+  if (room.phase === 'market' && all(room, player => player.phaseDone)) return startStocks(room);
+  if (room.phase === 'stocks' && all(room, player => player.phaseDone)) return startNews(room);
+  if (room.phase === 'news' && all(room, player => player.phaseDone)) return nextRound(room);
+}
+
 function tick(room) {
+  keepBotsReady(room);
   if (!room.deadline || Date.now() < room.deadline) return;
   if (room.phase === 'ship') return;
   if (room.phase === 'auction') return finishAuction(room);
